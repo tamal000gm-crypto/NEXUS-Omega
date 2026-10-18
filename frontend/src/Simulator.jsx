@@ -1,7 +1,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const API = "http://127.0.0.1:8000";
+const API = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://127.0.0.1:8000"
+).replace(/\/$/, "");
 
 const SCENARIOS = [
   { id: "traffic_spike", number: "01", label: "Traffic Spike", description: "Sudden increase in network throughput.", target: "1,400 units", icon: "↗" },
@@ -53,7 +56,23 @@ function severityClass(value) {
 }
 
 function errorMessage(err) {
-  return err instanceof Error ? err.message : "An unexpected error occurred.";
+  return err instanceof Error
+    ? err.message
+    : "An unexpected error occurred.";
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API}${path}`, options);
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      data.detail || `API request failed (${response.status}).`
+    );
+  }
+
+  return data;
 }
 
 export default function Simulator() {
@@ -66,24 +85,19 @@ export default function Simulator() {
   const [notice, setNotice] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // A ref locks requests immediately, before React renders the busy state.
   const requestLock = useRef(false);
   const mounted = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
+
     return () => {
       mounted.current = false;
     };
   }, []);
 
   const loadHistory = useCallback(async () => {
-    const response = await fetch(`${API}/api/simulations?limit=20`);
-    if (!response.ok) {
-      throw new Error(`Could not load simulation history (${response.status}).`);
-    }
-
-    const data = await response.json();
+    const data = await apiRequest("/api/simulations?limit=20");
 
     if (mounted.current) {
       setHistory(Array.isArray(data.records) ? data.records : []);
@@ -96,9 +110,7 @@ export default function Simulator() {
 
     async function initialLoad() {
       try {
-        const response = await fetch(`${API}/api/simulations?limit=20`);
-        if (!response.ok) throw new Error(`History request failed (${response.status}).`);
-        const data = await response.json();
+        const data = await apiRequest("/api/simulations?limit=20");
 
         if (!cancelled) {
           setHistory(Array.isArray(data.records) ? data.records : []);
@@ -110,6 +122,7 @@ export default function Simulator() {
     }
 
     initialLoad();
+
     return () => {
       cancelled = true;
     };
@@ -124,24 +137,21 @@ export default function Simulator() {
     setNotice("");
 
     try {
-      const response = await fetch(
-        `${API}/api/simulations/run?scenario=${encodeURIComponent(scenarioId)}`,
+      const data = await apiRequest(
+        `/api/simulations/run?scenario=${encodeURIComponent(scenarioId)}`,
         { method: "POST" }
       );
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "Simulation failed.");
-      }
+      if (!mounted.current) return;
 
       setLatest(data);
       setNotice(`${labelOf(data)} simulation completed.`);
       await loadHistory();
     } catch (err) {
-      setError(errorMessage(err));
+      if (mounted.current) setError(errorMessage(err));
     } finally {
       requestLock.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -154,39 +164,40 @@ export default function Simulator() {
     setNotice("");
 
     try {
-      const response = await fetch(`${API}/api/simulations/batch`, {
+      const data = await apiRequest("/api/simulations/batch", {
         method: "POST",
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "Batch simulation failed.");
-      }
+      if (!mounted.current) return;
 
       const results = Array.isArray(data.results) ? data.results : [];
-      if (results.length) setLatest(results[results.length - 1]);
+
+      if (results.length) {
+        setLatest(results[results.length - 1]);
+      }
 
       setNotice(`${results.length} scenario simulations completed.`);
       await loadHistory();
     } catch (err) {
-      setError(errorMessage(err));
+      if (mounted.current) setError(errorMessage(err));
     } finally {
       requestLock.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
   async function refreshHistory() {
     if (historyLoading) return;
+
     setHistoryLoading(true);
     setError("");
 
     try {
       await loadHistory();
     } catch (err) {
-      setError(errorMessage(err));
+      if (mounted.current) setError(errorMessage(err));
     } finally {
-      setHistoryLoading(false);
+      if (mounted.current) setHistoryLoading(false);
     }
   }
 
@@ -195,10 +206,18 @@ export default function Simulator() {
   const severity = analysis.severity || latest?.severity || "low";
   const score = analysis.anomaly_score ?? latest?.anomaly_score ?? 0;
   const isAnomaly = analysis.is_anomaly ?? latest?.is_anomaly ?? false;
-  const reasons = Array.isArray(analysis.reasons || latest?.reasons)
-    ? (analysis.reasons || latest?.reasons || []) : [];
-  const actions = Array.isArray(analysis.recommended_actions || latest?.recommended_actions)
-    ? (analysis.recommended_actions || latest?.recommended_actions || []) : [];
+
+  const reasons = Array.isArray(
+    analysis.reasons || latest?.reasons
+  )
+    ? (analysis.reasons || latest?.reasons || [])
+    : [];
+
+  const actions = Array.isArray(
+    analysis.recommended_actions || latest?.recommended_actions
+  )
+    ? (analysis.recommended_actions || latest?.recommended_actions || [])
+    : [];
 
   return (
     <section className="nexus-sim">
@@ -260,16 +279,31 @@ export default function Simulator() {
         <div>
           <div className="eyebrow">Digital twin / simulation lab</div>
           <h3>Scenario Simulator</h3>
-          <p className="muted">Run synthetic failure scenarios and inspect rule-based detection without touching a real server.</p>
+          <p className="muted">
+            Run synthetic failure scenarios and inspect rule-based detection
+            without touching a real server.
+          </p>
         </div>
         <span className="badge">SAFE DEMO</span>
       </div>
 
       <div className="stats">
-        <div className="stat"><div className="stat-label">Total runs</div><div className="stat-value">{summary.total_runs}</div></div>
-        <div className="stat"><div className="stat-label">Detected</div><div className="stat-value">{summary.detected}</div></div>
-        <div className="stat"><div className="stat-label">Not detected</div><div className="stat-value">{summary.not_detected}</div></div>
-        <div className="stat"><div className="stat-label">Detection rate</div><div className="stat-value">{fmt(summary.detection_rate, 1)}%</div></div>
+        <div className="stat">
+          <div className="stat-label">Total runs</div>
+          <div className="stat-value">{summary.total_runs}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Detected</div>
+          <div className="stat-value">{summary.detected}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Not detected</div>
+          <div className="stat-value">{summary.not_detected}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Detection rate</div>
+          <div className="stat-value">{fmt(summary.detection_rate, 1)}%</div>
+        </div>
       </div>
 
       <div className="panel">
@@ -279,10 +313,14 @@ export default function Simulator() {
 
         <div className="grid" style={{ marginTop: 16 }}>
           {SCENARIOS.map((s) => (
-            <button key={s.id} type="button"
+            <button
+              key={s.id}
+              type="button"
               className={`card ${selected === s.id ? "selected" : ""}`}
               onClick={() => setSelected(s.id)}
-              disabled={busy} aria-pressed={selected === s.id}>
+              disabled={busy}
+              aria-pressed={selected === s.id}
+            >
               <div className="num">{s.number}</div>
               <div className="symbol">{s.icon}</div>
               <h4>{s.label}</h4>
@@ -293,13 +331,23 @@ export default function Simulator() {
         </div>
 
         <div className="buttons">
-          <button type="button" className="btn primary" disabled={busy}
-            onClick={() => runOne(selected)}>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={busy}
+            onClick={() => runOne(selected)}
+          >
             {busy ? "Running…" : "Run selected scenario"}
           </button>
           <span className="muted">OR</span>
-          <button type="button" className="btn secondary" disabled={busy}
-            onClick={runBatch}>Run all 4 scenarios</button>
+          <button
+            type="button"
+            className="btn secondary"
+            disabled={busy}
+            onClick={runBatch}
+          >
+            Run all 4 scenarios
+          </button>
         </div>
 
         {notice && <div className="notice">{notice}</div>}
@@ -313,41 +361,76 @@ export default function Simulator() {
           <p className="muted">Analysis for the most recent scenario.</p>
 
           {!latest ? (
-            <div className="empty">Choose a scenario and run it to see the result.</div>
+            <div className="empty">
+              Choose a scenario and run it to see the result.
+            </div>
           ) : (
             <>
               <div className="status">
                 <div>
                   <div className="result-name">{labelOf(latest)}</div>
-                  <p className="muted">{isAnomaly ? "anomaly_detected" : "normal"}</p>
-                  <div className="score">{fmt(score, 0)} <span className="unit">/ 100</span></div>
+                  <p className="muted">
+                    {isAnomaly ? "anomaly_detected" : "normal"}
+                  </p>
+                  <div className="score">
+                    {fmt(score, 0)} <span className="unit">/ 100</span>
+                  </div>
                   <p className="muted">Rule-based anomaly score</p>
                 </div>
-                <span className={`severity ${severityClass(severity)}`}>{severity}</span>
+                <span className={`severity ${severityClass(severity)}`}>
+                  {severity}
+                </span>
               </div>
 
               <div className="metrics">
                 {METRICS.map((m) => (
                   <div className="metric" key={m.key}>
                     <div className="metric-label">{m.label}</div>
-                    <div className="metric-value">{fmt(metrics[m.key], m.digits)} <span className="unit">{m.unit}</span></div>
+                    <div className="metric-value">
+                      {fmt(metrics[m.key], m.digits)}{" "}
+                      <span className="unit">{m.unit}</span>
+                    </div>
                   </div>
                 ))}
               </div>
 
               <div className="subheading">Detection explanation</div>
-              {reasons.length ? <ul>{reasons.map((r, i) => <li key={i}>{String(r)}</li>)}</ul> : <p className="muted">No configured threshold was triggered.</p>}
+              {reasons.length ? (
+                <ul>
+                  {reasons.map((r, i) => <li key={i}>{String(r)}</li>)}
+                </ul>
+              ) : (
+                <p className="muted">No configured threshold was triggered.</p>
+              )}
 
               <div className="subheading">Recommended actions</div>
-              {actions.length ? <ul>{actions.map((a, i) => <li key={i}>{String(a)}</li>)}</ul> : <p className="muted">Continue monitoring system metrics.</p>}
+              {actions.length ? (
+                <ul>
+                  {actions.map((a, i) => <li key={i}>{String(a)}</li>)}
+                </ul>
+              ) : (
+                <p className="muted">Continue monitoring system metrics.</p>
+              )}
 
               <div className="footnote">
                 Run ID: {latest.simulation_id || latest.id || "—"}
-                <br />Saved: {latest.timestamp ? new Date(latest.timestamp).toLocaleString() : "—"}
+                <br />
+                Saved: {latest.timestamp
+                  ? new Date(latest.timestamp).toLocaleString()
+                  : "—"}
               </div>
+
               <div className="buttons">
-                <button type="button" className="btn secondary" disabled={busy}
-                  onClick={() => { setLatest(null); setNotice(""); setError(""); }}>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    setLatest(null);
+                    setNotice("");
+                    setError("");
+                  }}
+                >
                   Clear result view
                 </button>
               </div>
@@ -359,34 +442,60 @@ export default function Simulator() {
           <div className="eyebrow">03 / Persistence</div>
           <h3>Simulation history</h3>
           <p className="muted">Recent results saved in SQLite.</p>
+
           <div className="buttons">
-            <button type="button" className="btn secondary"
-              disabled={historyLoading || busy} onClick={refreshHistory}>
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={historyLoading || busy}
+              onClick={refreshHistory}
+            >
               {historyLoading ? "Refreshing…" : "Refresh history"}
             </button>
           </div>
 
           {!history.length ? (
-            <div className="empty">No saved simulations yet. Run a scenario to create history.</div>
+            <div className="empty">
+              No saved simulations yet. Run a scenario to create history.
+            </div>
           ) : (
             <div className="table-wrap" style={{ marginTop: 12 }}>
               <table>
-                <thead><tr><th>SCENARIO</th><th>RESULT</th><th>SEVERITY</th><th>SCORE</th><th>TIME</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>SCENARIO</th>
+                    <th>RESULT</th>
+                    <th>SEVERITY</th>
+                    <th>SCORE</th>
+                    <th>TIME</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {history.map((item, index) => {
                     const a = analysisOf(item);
                     const sev = a.severity || item.severity || "low";
                     const sc = a.anomaly_score ?? item.anomaly_score ?? 0;
                     const detected = a.is_anomaly ?? item.is_anomaly ?? false;
+
                     return (
-                      <tr key={item.simulation_id || item.id || index}
+                      <tr
+                        key={item.simulation_id || item.id || index}
                         onClick={() => setLatest(item)}
-                        title="Click to view saved result">
+                        title="Click to view saved result"
+                      >
                         <td>{labelOf(item)}</td>
                         <td>{detected ? "Detected" : "Normal"}</td>
-                        <td><span className={`severity ${severityClass(sev)}`}>{sev}</span></td>
+                        <td>
+                          <span className={`severity ${severityClass(sev)}`}>
+                            {sev}
+                          </span>
+                        </td>
                         <td>{fmt(sc, 0)}/100</td>
-                        <td>{item.timestamp ? new Date(item.timestamp).toLocaleString() : "—"}</td>
+                        <td>
+                          {item.timestamp
+                            ? new Date(item.timestamp).toLocaleString()
+                            : "—"}
+                        </td>
                       </tr>
                     );
                   })}
@@ -398,7 +507,9 @@ export default function Simulator() {
       </div>
 
       <p className="footnote">
-        Synthetic scenarios use predefined metrics and rule-based thresholds. Detection rate is a demo statistic, not validated real-world model accuracy. Recommendations are advisory.
+        Synthetic scenarios use predefined metrics and rule-based thresholds.
+        Detection rate is a demo statistic, not validated real-world model
+        accuracy. Recommendations are advisory.
       </p>
     </section>
   );

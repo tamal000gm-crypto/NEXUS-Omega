@@ -2,7 +2,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Simulator from "./Simulator";
 
-const API = "http://127.0.0.1:8000";
+const API = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://127.0.0.1:8000"
+).replace(/\/$/, "");
+
 const REFRESH_MS = 10000;
 
 const styles = `
@@ -85,8 +89,15 @@ function CpuChart({ records }) {
       aria-label="CPU usage history chart"
     >
       {[20, 60, 100, 140, 180].map((y) => (
-        <line key={y} x1="8" y1={y} x2="392" y2={y}
-          stroke="#24344b" strokeWidth="1" />
+        <line
+          key={y}
+          x1="8"
+          y1={y}
+          x2="392"
+          y2={y}
+          stroke="#24344b"
+          strokeWidth="1"
+        />
       ))}
       <polyline
         points={coords}
@@ -120,67 +131,78 @@ export default function App() {
     if (manual && mounted.current) setRefreshing(true);
 
     try {
-      const results = await Promise.allSettled([
-        fetch(`${API}/api/telemetry`),
-        fetch(`${API}/api/telemetry/history?limit=30`),
-        fetch(`${API}/api/telemetry/summary`),
-        fetch(`${API}/api/analytics/trends?limit=100`),
-        fetch(`${API}/api/health`),
-      ]);
+      const endpoints = [
+        `${API}/api/telemetry`,
+        `${API}/api/telemetry/history?limit=30`,
+        `${API}/api/telemetry/summary`,
+        `${API}/api/analytics/trends?limit=100`,
+        `${API}/api/health`,
+      ];
+
+      const results = await Promise.allSettled(
+        endpoints.map((url) =>
+          fetch(url).then((response) => {
+            if (!response.ok) {
+              throw new Error(`API returned ${response.status}`);
+            }
+            return response.json();
+          })
+        )
+      );
 
       if (!mounted.current) return;
 
       const [liveResult, historyResult, summaryResult, analyticsResult, healthResult] = results;
 
-      const readJson = async (result) => {
-        if (result.status !== "fulfilled") {
-          throw result.reason || new Error("Request failed");
-        }
-        if (!result.value.ok) {
-          throw new Error(`API returned ${result.value.status}`);
-        }
-        return result.value.json();
-      };
-
       let anySuccess = false;
 
-      if (liveResult.status === "fulfilled" && liveResult.value.ok) {
-        const liveData = await liveResult.value.json();
+      if (liveResult.status === "fulfilled") {
+        const liveData = liveResult.value;
         const live = liveData?.telemetry || liveData?.data || liveData;
+
         if (live && typeof live === "object") {
           setTelemetry(live);
           anySuccess = true;
         }
       }
 
-      if (historyResult.status === "fulfilled" && historyResult.value.ok) {
-        const data = await historyResult.value.json();
-        const records = Array.isArray(data) ? data : data?.records || data?.history || [];
+      if (historyResult.status === "fulfilled") {
+        const data = historyResult.value;
+        const records = Array.isArray(data)
+          ? data
+          : data?.records || data?.history || [];
+
         if (Array.isArray(records)) {
           setHistory(records);
+
           if (records.length > 0) {
             setTelemetry((current) => current || records[0]);
           }
+
           anySuccess = true;
         }
       }
 
-      if (summaryResult.status === "fulfilled" && summaryResult.value.ok) {
-        setSummary(await summaryResult.value.json());
+      if (summaryResult.status === "fulfilled") {
+        setSummary(summaryResult.value);
         anySuccess = true;
       }
 
-      if (analyticsResult.status === "fulfilled" && analyticsResult.value.ok) {
-        setAnalytics(await analyticsResult.value.json());
+      if (analyticsResult.status === "fulfilled") {
+        setAnalytics(analyticsResult.value);
         anySuccess = true;
       }
 
-      if (healthResult.status === "fulfilled" && healthResult.value.ok) {
+      if (healthResult.status === "fulfilled") {
         anySuccess = true;
       }
 
       setConnected(anySuccess);
-      setError(anySuccess ? "" : "Backend unreachable. Check that FastAPI is running on port 8000.");
+      setError(
+        anySuccess
+          ? ""
+          : `Cannot reach the NEXUS API at ${API}. Check backend availability and CORS settings.`
+      );
       setLastUpdated(new Date());
     } catch (err) {
       if (mounted.current) {
@@ -215,8 +237,12 @@ export default function App() {
   const errorRate = Number(current.error_rate) || 0;
 
   const analyticsText = analytics
-    ? (analytics.summary || analytics.message || analytics.overall_status ||
-       "Analytics available. Review the recommendations returned by the backend.")
+    ? (
+        analytics.summary ||
+        analytics.message ||
+        analytics.overall_status ||
+        "Analytics available. Review the recommendations returned by the backend."
+      )
     : "Waiting for analytics data…";
 
   const recommendations = Array.isArray(analytics?.recommendations)
@@ -239,17 +265,29 @@ export default function App() {
         <header className="nx-header">
           <div>
             <div className="nx-brand">NEXUS <span>Ω</span></div>
-            <div className="nx-sub">Autonomous Enterprise Intelligence</div>
+            <div className="nx-sub">
+              Autonomous Enterprise Intelligence
+            </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              flexWrap: "wrap",
+            }}
+          >
             <div className="nx-status">
               <span
                 className="nx-dot"
-                style={{ background: connected ? "#35d6a3" : "#ff7777" }}
+                style={{
+                  background: connected ? "#35d6a3" : "#ff7777",
+                }}
               />
               {connected ? "Backend connected" : "Connection issue"}
             </div>
+
             <button
               className="nx-btn"
               onClick={() => refreshDashboard(true)}
@@ -265,17 +303,44 @@ export default function App() {
         <div className="nx-section-title">Live system telemetry</div>
 
         <section className="nx-grid">
-          <MetricCard label="CPU Usage" value={`${number(cpu)}%`} unit="Processor utilization" percent={cpu} />
-          <MetricCard label="Memory Usage" value={`${number(memory)}%`} unit="Memory utilization" percent={memory} />
-          <MetricCard label="Network Traffic" value={number(network, 0)} unit="Traffic units" percent={Math.min(network / 15, 100)} />
-          <MetricCard label="Response Latency" value={`${number(latency)} ms`} unit="Response time" percent={Math.min(latency / 10, 100)} />
-          <MetricCard label="Error Rate" value={`${number(errorRate)}%`} unit="Observed errors" percent={errorRate * 10} />
+          <MetricCard
+            label="CPU Usage"
+            value={`${number(cpu)}%`}
+            unit="Processor utilization"
+            percent={cpu}
+          />
+          <MetricCard
+            label="Memory Usage"
+            value={`${number(memory)}%`}
+            unit="Memory utilization"
+            percent={memory}
+          />
+          <MetricCard
+            label="Network Traffic"
+            value={number(network, 0)}
+            unit="Traffic units"
+            percent={Math.min(network / 15, 100)}
+          />
+          <MetricCard
+            label="Response Latency"
+            value={`${number(latency)} ms`}
+            unit="Response time"
+            percent={Math.min(latency / 10, 100)}
+          />
+          <MetricCard
+            label="Error Rate"
+            value={`${number(errorRate)}%`}
+            unit="Observed errors"
+            percent={errorRate * 10}
+          />
         </section>
 
         <section className="nx-columns" style={{ marginTop: 18 }}>
           <div className="nx-card">
             <div className="nx-label">Performance history</div>
-            <div className="nx-section-title" style={{ marginTop: 9 }}>CPU utilization</div>
+            <div className="nx-section-title" style={{ marginTop: 9 }}>
+              CPU utilization
+            </div>
             <CpuChart records={history} />
             <div className="nx-muted">
               {history.length} telemetry records loaded. Refreshing every 10 seconds.
@@ -284,16 +349,24 @@ export default function App() {
 
           <div className="nx-card">
             <div className="nx-label">System intelligence</div>
-            <div className="nx-section-title" style={{ marginTop: 9 }}>Risk analysis</div>
+            <div className="nx-section-title" style={{ marginTop: 9 }}>
+              Risk analysis
+            </div>
             <p className="nx-muted">{analyticsText}</p>
 
             {risks.length > 0 && (
               <>
-                <div className="nx-label" style={{ marginTop: 16 }}>Warnings</div>
+                <div className="nx-label" style={{ marginTop: 16 }}>
+                  Warnings
+                </div>
                 <ul className="nx-muted">
                   {risks.slice(0, 5).map((item, index) => (
                     <li key={index}>
-                      {typeof item === "string" ? item : item.message || item.description || JSON.stringify(item)}
+                      {typeof item === "string"
+                        ? item
+                        : item.message ||
+                          item.description ||
+                          JSON.stringify(item)}
                     </li>
                   ))}
                 </ul>
@@ -302,11 +375,17 @@ export default function App() {
 
             {recommendations.length > 0 && (
               <>
-                <div className="nx-label" style={{ marginTop: 16 }}>Recommendations</div>
+                <div className="nx-label" style={{ marginTop: 16 }}>
+                  Recommendations
+                </div>
                 <ul className="nx-muted">
                   {recommendations.slice(0, 5).map((item, index) => (
                     <li key={index}>
-                      {typeof item === "string" ? item : item.message || item.action || JSON.stringify(item)}
+                      {typeof item === "string"
+                        ? item
+                        : item.message ||
+                          item.action ||
+                          JSON.stringify(item)}
                     </li>
                   ))}
                 </ul>
@@ -316,7 +395,10 @@ export default function App() {
             {summary && (
               <div className="nx-muted" style={{ marginTop: 16 }}>
                 Total telemetry records:{" "}
-                {summary.total_records ?? summary.count ?? summary.total ?? "—"}
+                {summary.total_records ??
+                  summary.count ??
+                  summary.total ??
+                  "—"}
               </div>
             )}
           </div>
@@ -336,10 +418,15 @@ export default function App() {
                 <th>Error rate</th>
               </tr>
             </thead>
+
             <tbody>
               {history.slice(0, 10).map((item, index) => (
                 <tr key={item.id ?? item.timestamp ?? index}>
-                  <td>{item.timestamp ? String(item.timestamp).replace("T", " ").slice(0, 19) : "—"}</td>
+                  <td>
+                    {item.timestamp
+                      ? String(item.timestamp).replace("T", " ").slice(0, 19)
+                      : "—"}
+                  </td>
                   <td>{number(item.cpu_usage)}%</td>
                   <td>{number(item.memory_usage)}%</td>
                   <td>{number(item.network_traffic, 0)}</td>
@@ -347,8 +434,13 @@ export default function App() {
                   <td>{number(item.error_rate)}%</td>
                 </tr>
               ))}
+
               {history.length === 0 && (
-                <tr><td colSpan="6" className="nx-muted">Waiting for telemetry records…</td></tr>
+                <tr>
+                  <td colSpan="6" className="nx-muted">
+                    Waiting for telemetry records…
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -362,9 +454,13 @@ export default function App() {
 
         <footer className="nx-footer">
           NEXUS Ω · Enterprise operations monitoring ·{" "}
-          {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : "Connecting…"}
+          {lastUpdated
+            ? `Last updated ${lastUpdated.toLocaleTimeString()}`
+            : "Connecting…"}
           {" · "}
-          <span className="nx-pill">{connected ? "ONLINE" : "CHECK CONNECTION"}</span>
+          <span className="nx-pill">
+            {connected ? "ONLINE" : "CHECK CONNECTION"}
+          </span>
         </footer>
       </main>
     </>
