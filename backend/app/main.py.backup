@@ -1,0 +1,76 @@
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.telemetry import generate_telemetry
+
+app = FastAPI(
+    title="NEXUS Ω Enterprise Intelligence API",
+    description=(
+        "Synthetic telemetry, anomaly detection, "
+        "predictive intelligence, and digital twin simulations."
+    ),
+    version="3.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:5176",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+def root():
+    return {
+        "name": "NEXUS Ω Enterprise Intelligence API",
+        "version": "3.1.0",
+        "status": "online",
+        "docs": "/docs",
+    }
+
+
+@app.get("/api/health")
+def health():
+    return {
+        "status": "healthy",
+        "service": "NEXUS Ω API",
+    }
+
+
+@app.get("/api/telemetry")
+def telemetry():
+    return generate_telemetry()
+
+
+@app.get("/api/telemetry/batch")
+def telemetry_batch(count: int = 10):
+    count = max(1, min(count, 100))
+    return {
+        "count": count,
+        "records": [generate_telemetry() for _ in range(count)],
+    }
+
+
+@app.get("/api/predictions")
+def predictions():
+    try:
+        from app.prediction import build_predictions
+        return build_predictions()
+    except ImportError as exc:
+        return {
+            "status": "unavailable",
+            "message": "Prediction module is not configured.",
+            "detail": str(exc),
+        }

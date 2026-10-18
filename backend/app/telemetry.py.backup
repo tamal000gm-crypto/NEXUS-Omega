@@ -1,0 +1,75 @@
+
+import random
+from datetime import datetime, timezone
+from collections import deque
+from threading import Lock
+
+
+# Keep the latest 300 telemetry records in memory.
+_TELEMETRY_HISTORY = deque(maxlen=300)
+_HISTORY_LOCK = Lock()
+
+
+def generate_telemetry():
+    """Generate synthetic enterprise system metrics."""
+
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cpu_usage": round(random.uniform(15, 85), 2),
+        "memory_usage": round(random.uniform(30, 90), 2),
+        "network_traffic": round(random.uniform(100, 1000), 2),
+        "response_latency": round(random.uniform(20, 250), 2),
+        "error_rate": round(random.uniform(0, 5), 2),
+        "mode": "SYNTHETIC_DEMO",
+    }
+
+    # Store a copy for future trend analysis.
+    with _HISTORY_LOCK:
+        _TELEMETRY_HISTORY.append(record.copy())
+
+    return record
+
+
+def get_telemetry_history(limit=60):
+    """Return recent telemetry records, newest first."""
+
+    limit = max(1, min(int(limit), 300))
+
+    with _HISTORY_LOCK:
+        records = list(_TELEMETRY_HISTORY)
+
+    return records[-limit:][::-1]
+
+
+def get_telemetry_summary():
+    """Calculate basic statistics from recent telemetry."""
+
+    with _HISTORY_LOCK:
+        records = list(_TELEMETRY_HISTORY)
+
+    if not records:
+        return {
+            "samples": 0,
+            "message": "No telemetry records available yet.",
+        }
+
+    metrics = [
+        "cpu_usage",
+        "memory_usage",
+        "network_traffic",
+        "response_latency",
+        "error_rate",
+    ]
+
+    summary = {"samples": len(records)}
+
+    for metric in metrics:
+        values = [record[metric] for record in records]
+        summary[metric] = {
+            "latest": values[-1],
+            "average": round(sum(values) / len(values), 2),
+            "minimum": min(values),
+            "maximum": max(values),
+        }
+
+    return summary
